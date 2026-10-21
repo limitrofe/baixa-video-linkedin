@@ -441,6 +441,51 @@
     return htmlScanStreams;
   }
 
+  /**
+   * Último recurso: remonta as qualidades a partir dos pedaços que a página
+   * pediu na rede. Cada pedaço tem um número na própria URL e o `1` é o
+   * inicializador. Só entra em página de um post só — no feed, os pedaços de
+   * vários vídeos se misturariam.
+   */
+  function fragmentStreams() {
+    const groups = new Map();
+
+    for (const entry of performance.getEntriesByType("resource")) {
+      const match = /^(https:\/\/[^?]*\/playlist\/vid\/[^?]*\/)(\d+)\/(\d+)(\?[^#]*)?$/.exec(entry.name);
+      if (!match) continue;
+
+      const [, base, index, number, query = ""] = match;
+      const group = groups.get(base) ?? new Map();
+      group.set(Number(index), `${base}${index}/${number}${query}`);
+      groups.set(base, group);
+    }
+
+    const out = [];
+    for (const [base, byIndex] of groups) {
+      const indexes = [...byIndex.keys()].sort((a, b) => a - b);
+      if (indexes.length < 2) continue;
+
+      const init = byIndex.get(indexes[0]);
+      const segments = indexes
+        .slice(1)
+        .map((key) => byIndex.get(key))
+        .filter((url) => url && url !== init);
+      if (segments.length === 0) continue;
+
+      const height = /(\d{3,4})p/.exec(base);
+      out.push({
+        kind: "segments",
+        init,
+        segments,
+        url: segments[0],
+        height: height ? Number(height[1]) : null,
+        bitrate: 0,
+      });
+    }
+
+    return out;
+  }
+
   /** Varre a página inteira sem depender de achar o player. */
   function pageStreams() {
     const found = [];
@@ -451,6 +496,9 @@
     found.push(...streamsFromCodes(document));
     found.push(...htmlStreams());
     found.push(...networkStreams());
+    if (normalize(found).length === 0 && /\/posts\/|\/feed\/update\//.test(location.pathname)) {
+      found.push(...fragmentStreams());
+    }
 
     return normalize(found);
   }
