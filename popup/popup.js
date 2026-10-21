@@ -99,6 +99,8 @@ async function download(stream, button, context) {
     type: "download",
     url: stream.url,
     kind: stream.kind,
+    init: stream.init ?? null,
+    segments: stream.segments ?? null,
     quality: stream.quality,
     author: context?.author ?? null,
     postId: context?.postId ?? null,
@@ -192,6 +194,7 @@ function render(context) {
   const notes = [];
   if (context.via === "rede") notes.push("pego da rede ao carregar o vídeo");
   if (preferred?.kind === "hls") notes.push("veio em pedaços: a extensão junta antes de salvar");
+  if (preferred?.kind === "segments") notes.push("lista do player lida: a extensão junta os pedaços e salva o vídeo inteiro");
 
   setStatus(
     `Vídeo encontrado (${context.streams.length} opções${notes.length ? " — " + notes.join("; ") : ""}).`,

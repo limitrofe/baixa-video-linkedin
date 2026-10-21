@@ -62,17 +62,24 @@
     const list = [];
 
     for (const stream of streams) {
-      if (!stream?.url || !/^https?:\/\//i.test(stream.url)) continue;
-      const url = stream.url.trim();
-      if (seen.has(url)) continue;
-      seen.add(url);
+      // Lista de pedaços já pronta (bloco do player): não tem um endereço só.
+      const isSegments =
+        stream?.kind === "segments" && Array.isArray(stream.segments) && stream.segments.length > 0;
 
-      const kind = stream.kind ?? kindFromUrl(url);
+      if (!isSegments && (!stream?.url || !/^https?:\/\//i.test(stream.url))) continue;
+
+      const url = isSegments ? stream.segments[0] : String(stream.url).trim();
+      const key = isSegments ? `segments:${stream.segments.join("|")}` : url;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const kind = isSegments ? "segments" : stream.kind ?? kindFromUrl(url);
       if (kind === "dash") continue;
 
       const height = Number(stream.height) || null;
       const quality = qualityFromHeight(height);
-      const parts = [quality, kind === "hls" ? "pedaços" : "arquivo inteiro"];
+      const what = kind === "hls" ? "pedaços" : kind === "segments" ? "completo" : "arquivo inteiro";
+      const parts = [quality, what];
       if (stream.bitrate >= 1_000_000) parts.push(`${(stream.bitrate / 1_000_000).toFixed(1).replace(".", ",")} Mbps`);
 
       list.push({
@@ -82,10 +89,11 @@
         quality,
         bitrate: Number(stream.bitrate) || 0,
         label: parts.filter(Boolean).join(" · "),
+        ...(isSegments ? { init: stream.init ?? null, segments: stream.segments } : {}),
       });
     }
 
-    const rank = { mp4: 0, hls: 1, outro: 2 };
+    const rank = { mp4: 0, segments: 0, hls: 1, outro: 2 };
     list.sort(
       (a, b) =>
         (b.height ?? 0) - (a.height ?? 0) ||
@@ -105,10 +113,166 @@
     return streams.find((stream) => (stream.height ?? 0) <= target) ?? streams[streams.length - 1];
   }
 
+  // ------------------------------------------------------- bloco do player (VHS)
+
+  // O LinkedIn não deixa `<video data-sources>`. Ele embute na página um bloco
+  // `data:application/vnd.videojs.vhs+json,{...}` com todas as qualidades e o
+  // endereço assinado de cada pedaço de ~4 segundos. É daí que sai o vídeo.
+  const VHS_MARKER = "data:application/vnd.videojs.vhs+json,";
+
+  function segmentsFromManifest(manifest) {
+    const playlists = Array.isArray(manifest?.playlists) ? manifest.playlists : [];
+    const candidates = [];
+
+    for (const playlist of playlists) {
+      const entries = Array.isArray(playlist?.segments) ? playlist.segments : [];
+      const urls = entries
+        .map((entry) => entry?.uri)
+        .filter((url) => typeof url === "string" && url.startsWith("http"));
+      if (urls.length === 0) continue;
+
+      const init = entries[0]?.map?.uri ?? null;
+      // Em algumas qualidades o primeiro "pedaço" é o próprio inicializador.
+      const segments = urls.filter((url) => url !== init);
+      if (segments.length === 0) continue;
+
+      const attributes = playlist?.attributes ?? {};
+      candidates.push({
+        kind: "segments",
+        init,
+        segments,
+        url: segments[0],
+        width: Number(attributes?.RESOLUTION?.width) || null,
+        height: Number(attributes?.RESOLUTION?.height) || null,
+        bitrate: Number(attributes?.BANDWIDTH) || 0,
+        codecs: String(attributes?.CODECS ?? ""),
+      });
+    }
+
+    // AV1 no mesmo tamanho do H.264 só atrapalha: menos players abrem.
+    const h264Heights = new Set(
+      candidates.filter((item) => /avc1/i.test(item.codecs)).map((item) => item.height)
+    );
+    const seen = new Set();
+    return candidates.filter((item) => {
+      if (!/avc1/i.test(item.codecs) && h264Heights.has(item.height)) return false;
+      const key = `${item.height}|${item.segments.join("|")}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  /** Recorta o bloco: pode vir escapado (string de JS) ou cru (atributo src). */
+  function readPayload(source, start) {
+    let cursor = start;
+    let raw = "";
+
+    if (source[cursor] === "%") {
+      while (cursor < source.length) {
+        const char = source[cursor];
+        if (char === '"' || char === "'" || char === "<" || char === "\n" || char === " ") break;
+        raw += char;
+        cursor += 1;
+      }
+      return { raw, next: cursor };
+    }
+
+    if (source[cursor] === "{" && source[cursor + 1] === "\\") {
+      while (cursor < source.length) {
+        const char = source[cursor];
+        if (char === "\\") {
+          raw += char + (source[cursor + 1] ?? "");
+          cursor += 2;
+          continue;
+        }
+        if (char === '"' || char === "'" || char === "<" || char === "\n") break;
+        raw += char;
+        cursor += 1;
+      }
+      return { raw, next: cursor };
+    }
+
+    let depth = 0;
+    let inString = false;
+
+    while (cursor < source.length) {
+      const char = source[cursor];
+      raw += char;
+      cursor += 1;
+
+      if (inString) {
+        if (char === "\\") {
+          raw += source[cursor] ?? "";
+          cursor += 1;
+          continue;
+        }
+        if (char === '"') inString = false;
+        continue;
+      }
+
+      if (char === '"') inString = true;
+      else if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+
+    return { raw, next: cursor };
+  }
+
+  /** Lê todos os blocos VHS de um texto (atributo do player ou HTML da página). */
+  function vhsStreamsFrom(text) {
+    const source = String(text ?? "");
+    const out = [];
+    let index = 0;
+
+    while (index < source.length) {
+      const at = source.indexOf(VHS_MARKER, index);
+      if (at === -1) break;
+
+      const start = at + VHS_MARKER.length;
+      const { raw, next } = readPayload(source, start);
+
+      if (raw.length > 0) {
+        let json = raw
+          .replace(/\\u0026/gi, "&")
+          .replace(/\\"/g, '"')
+          .replace(/\\\//g, "/")
+          .replace(/&quot;|&#34;/gi, '"')
+          .replace(/&amp;/g, "&");
+        if (json.startsWith("%7B")) {
+          try {
+            json = decodeURIComponent(json);
+          } catch {
+            // payload em outro formato: ignora
+          }
+        }
+        try {
+          out.push(...segmentsFromManifest(JSON.parse(json)));
+        } catch {
+          // bloco cortado ou em formato novo: segue procurando
+        }
+      }
+
+      index = next > start ? next : start;
+    }
+
+    return out;
+  }
+
   // ------------------------------------------------------- extrair os endereços
 
   function streamsFromVideoElement(video) {
     const out = [];
+
+    // Caminho que o LinkedIn usa: o bloco do player vai no próprio src.
+    for (const candidate of [video.getAttribute?.("src"), video.src, video.currentSrc]) {
+      if (typeof candidate === "string" && candidate.startsWith(VHS_MARKER)) {
+        out.push(...vhsStreamsFrom(candidate));
+      }
+    }
 
     const raw = video.getAttribute?.("data-sources");
     if (raw) {
@@ -251,7 +415,8 @@
   function networkStreams() {
     const out = [];
     const whole = /(\.m3u8|playlist\/vid\/|\.mp4(\?|$))/i;
-    const segment = /(Fragments\(|QualityLevels\(|\.ts(\?|$)|\.m4s(\?|$)|init\.mp4)/i;
+    // `.../2/1792507391280` é um pedaço de ~4 segundos, não um vídeo.
+    const segment = /(Fragments\(|QualityLevels\(|\.ts(\?|$)|\.m4s(\?|$)|init\.mp4|playlist\/vid\/[^?]*\/\d+\/\d+(\?|$))/i;
 
     for (const entry of performance.getEntriesByType("resource")) {
       const url = entry.name;
@@ -259,6 +424,21 @@
       out.push({ url, kind: kindFromUrl(url), height: null, bitrate: 0 });
     }
     return out;
+  }
+
+  // Ler o HTML inteiro custa caro; guarda o resultado por um tempo.
+  let htmlScanAt = 0;
+  let htmlScanStreams = [];
+
+  function htmlStreams() {
+    if (Date.now() - htmlScanAt < 10_000) return htmlScanStreams;
+    htmlScanAt = Date.now();
+    try {
+      htmlScanStreams = vhsStreamsFrom(document.documentElement.outerHTML);
+    } catch {
+      htmlScanStreams = [];
+    }
+    return htmlScanStreams;
   }
 
   /** Varre a página inteira sem depender de achar o player. */
@@ -269,6 +449,7 @@
       found.push(...streamsFromVideoElement(element));
     }
     found.push(...streamsFromCodes(document));
+    found.push(...htmlStreams());
     found.push(...networkStreams());
 
     return normalize(found);
@@ -455,6 +636,8 @@
       type: "download",
       url: stream.url,
       kind: stream.kind,
+      init: stream.init ?? null,
+      segments: stream.segments ?? null,
       quality: stream.quality,
       author: context.author,
       postId: context.postId,

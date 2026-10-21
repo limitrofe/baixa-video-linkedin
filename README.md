@@ -37,19 +37,36 @@ a sua sessão e lista os vídeos.
 
 ## Por que às vezes demora mais
 
-O LinkedIn entrega vídeo de duas formas, e elas são bem diferentes:
+O LinkedIn entrega vídeo de três formas, e elas são bem diferentes:
 
 | O que a página oferece | O que a extensão faz | Quanto demora |
 | --- | --- | --- |
-| **MP4 inteiro** (o caso comum) | manda o endereço direto para o Chrome | segundos |
-| **Lista de pedaços** (HLS) | baixa todos os pedaços em paralelo e junta num arquivo | segundos, sem reencode |
+| **MP4 inteiro** | manda o endereço direto para o Chrome | segundos |
+| **Lista de pedaços** (o caso comum hoje) | baixa todos os pedaços em paralelo e junta num arquivo | segundos, sem reencode |
 | **Nada acessível** | grava a imagem na tela em tempo real | o tempo do vídeo |
 
-Se os dois primeiros caminhos falharem, aparece um aviso; **clique de novo** e a
+### O bloco do player (formato Video.js/VHS)
+
+O LinkedIn não coloca mais `<video data-sources>` na página: ele embute um bloco
+de dados com o endereço assinado de **cada pedaço de ~4 segundos** e todas as
+qualidades (360p, 480p, 540p, 720p, até 2 Mbps):
+
+```
+data:application/vnd.videojs.vhs+json,{"duration":50.3,"playlists":[
+  {"attributes":{"RESOLUTION":{"width":1280,"height":720},"BANDWIDTH":2459190},
+   "segments":[{"uri":"https://dms.licdn.com/playlist/vid/.../2/...","map":{...}}]}]}
+```
+
+A extensão lê esse bloco (no `src` do player ou no HTML da página), baixa o
+inicializador + todos os pedaços e entrega um **MP4 completo, 1280x720, sem
+reencode**. Era isso que faltava: nem olhando o HTML antigo, nem com outras
+ferramentas, esse bloco aparecia.
+
+Se os caminhos acima falharem, aparece um aviso; **clique de novo** e a
 extensão grava o vídeo em tempo real (o vídeo toca do começo ao fim e você
 recebe um `.mp4` ou `.webm`).
 
-Arquivos vindos de "lista de pedaços" podem sair como `.ts` (o formato dos
+Vídeos remontados de lista HLS podem sair como `.ts` (o formato dos
 pedaços, aceito por qualquer player). Para virar `.mp4` sem perder qualidade, o
 computador precisa ter o `ffmpeg`:
 
@@ -94,7 +111,7 @@ O número no meio é o identificador do post — serve para achar o original dep
 
 ```
 clique ──► content script (acha o vídeo no post)
-              │  lê data-sources e os blocos <code> da página
+              │  lê o bloco do player (VHS), data-sources e os blocos <code>
               ▼
         service worker
               │
@@ -108,10 +125,13 @@ clique ──► content script (acha o vídeo no post)
  chrome.downloads ◄────┘
 ```
 
+- `lib/vhs.js` — lê o bloco Video.js/VHS (o formato que o LinkedIn usa hoje):
+  inicializador, pedaços assinados e qualidades.
 - `lib/video.js` — encontra os endereços na página (`data-sources`, JSON com
-  `progressiveStreams`/`adaptiveStreams`) e escolhe a qualidade.
+  `progressiveStreams`/`adaptiveStreams`, blocos VHS) e escolhe a qualidade.
 - `lib/hls.js` — lê a lista de pedaços, baixa em paralelo, descriptografa
-  AES-128 quando existe e devolve os bytes na ordem.
+  AES-128 quando existe e devolve os bytes na ordem. `downloadParts()` é o mesmo
+  trabalho para uma lista de pedaços já pronta.
 - `offscreen.js` — página invisível que monta o arquivo e entrega ao Chrome
   (só ela pode criar `Blob`).
 - `content/content.js` — o botão no vídeo e a gravação em tempo real de reserva.
@@ -124,9 +144,9 @@ clique ──► content script (acha o vídeo no post)
 npm test
 ```
 
-Os testes cobrem a leitura de links, a extração de endereços de uma página real
-e o remontador de pedaços (inclusive com um servidor de mentira, sem tocar na
-rede).
+Os testes cobrem a leitura de links, a extração de endereços de uma página real,
+o bloco do player (VHS) e o remontador de pedaços (inclusive com um servidor de
+mentira, sem tocar na rede).
 
 ## Licença
 

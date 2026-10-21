@@ -83,7 +83,9 @@ async function ensureOffscreen() {
  * inteiro (lista de pedaços ou arquivo pronto) — nunca os pedacinhos soltos.
  */
 const CANDIDATE_URL = /(\.m3u8|playlist\/vid\/|\.mp4(\?|$))/i;
-const SEGMENT_URL = /(Fragments\(|QualityLevels\(|\.ts(\?|$)|\.m4s(\?|$)|init\.mp4)/i;
+// Também são pedaços: os endereços `.../2/1792507391280` que o player pede,
+// cada um com ~4 segundos. Sem isso a lista da rede viraria 13 "vídeos" falsos.
+const SEGMENT_URL = /(Fragments\(|QualityLevels\(|\.ts(\?|$)|\.m4s(\?|$)|init\.mp4|playlist\/vid\/[^?]*\/\d+\/\d+(\?|$))/i;
 
 const CAPTURE_LIMIT = 40;
 const CAPTURE_TTL_MS = 45 * 60 * 1000;
@@ -148,13 +150,16 @@ async function download(message) {
       extension,
     });
 
-  if (message.kind === "hls") {
+  // Lista de pedaços pronta (bloco Video.js/VHS do LinkedIn) ou lista HLS.
+  if (message.kind === "hls" || message.kind === "segments" || message.segments?.length) {
     await ensureOffscreen();
     const response = await chrome.runtime.sendMessage({
       target: "offscreen",
       type: "assemble",
       url: message.url,
-      filename: filename.replace(/\.(mp4|ts|bin)$/i, ".ts"),
+      init: message.init ?? null,
+      segments: message.segments ?? null,
+      filename: filename.replace(/\.(mp4|ts|bin)$/i, message.kind === "hls" ? ".ts" : ".mp4"),
     });
     if (!response?.ok) throw new Error(response?.error || "A montagem do vídeo falhou.");
     return { mode: "montagem", filename: response.filename, segments: response.segments ?? null };
@@ -186,7 +191,7 @@ async function resolveUrl(message) {
   if (!response.ok) throw new Error(`O LinkedIn respondeu ${response.status}.`);
 
   const html = await response.text();
-  if (/authwall|Join LinkedIn to see/i.test(html) && !/<video|progressiveStreams/i.test(html)) {
+  if (/authwall|Join LinkedIn to see/i.test(html) && !/<video|progressiveStreams|videojs/i.test(html)) {
     throw new Error("O LinkedIn pediu login. Entre na sua conta e abra o post.");
   }
 

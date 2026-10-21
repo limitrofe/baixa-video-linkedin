@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Baixa Vídeo LinkedIn",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minimum_chrome_version": "109",
   "description": "Baixa vídeos de posts do LinkedIn — MP4 inteiro quando existe, ou remontando os pedaços — sem serviço de terceiros.",
   "icons": {
