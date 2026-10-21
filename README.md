@@ -27,6 +27,10 @@ superior direito. Um clique baixa o arquivo na melhor qualidade disponível.
 Clique no ícone da extensão. Ele mostra quantas opções de arquivo aquele post
 oferece e permite escolher uma qualidade específica.
 
+> **Se o popup disser que não achou nada:** dê play no vídeo por uns 2 segundos e
+> abra o popup de novo. O LinkedIn só pede o arquivo do vídeo ao servidor quando
+> ele começa a tocar — e a extensão pega o endereço justamente desse pedido.
+
 **3. Colando um link**
 No popup, cole o endereço do post no campo de baixo. A extensão lê a página com
 a sua sessão e lista os vídeos.
@@ -66,6 +70,9 @@ O número no meio é o identificador do post — serve para achar o original dep
 - Sem telemetria, sem servidor próprio, sem analytics.
 - A extensão fala só com `www.linkedin.com` (para ler a página) e com os
   servidores de mídia do próprio LinkedIn (`*.licdn.com`).
+- Ela observa os pedidos de arquivo feitos por essas páginas para descobrir onde
+  está o vídeo — mas **não lê, não guarda e não envia o conteúdo** desses
+  arquivos. Guarda só o endereço, por até 45 minutos, e só da aba em uso.
 - Guarda apenas a qualidade preferida (`storage.sync`) e, temporariamente, qual
   post está aberto em cada aba (`storage.session`, some ao fechar o navegador).
 
@@ -108,6 +115,8 @@ clique ──► content script (acha o vídeo no post)
 - `offscreen.js` — página invisível que monta o arquivo e entrega ao Chrome
   (só ela pode criar `Blob`).
 - `content/content.js` — o botão no vídeo e a gravação em tempo real de reserva.
+- `background.js` — além de orquestrar tudo, anota os endereços de vídeo que a
+  página pede na rede. É a fonte que salva o dia quando o HTML não traz nada.
 
 ## Desenvolvimento
 

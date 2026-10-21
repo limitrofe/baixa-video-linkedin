@@ -74,6 +74,57 @@ async function ensureOffscreen() {
   await creatingOffscreen;
 }
 
+// ------------------------------------------------- arquivos de vídeo vistos na rede
+
+/**
+ * Nenhum navegador entrega o endereço do vídeo no HTML do LinkedIn atual: o
+ * player pede o arquivo em segundo plano, depois que a pessoa aperta play.
+ * Então a extensão fica de olho nos pedidos e guarda o que parece ser vídeo
+ * inteiro (lista de pedaços ou arquivo pronto) — nunca os pedacinhos soltos.
+ */
+const CANDIDATE_URL = /(\.m3u8|playlist\/vid\/|\.mp4(\?|$))/i;
+const SEGMENT_URL = /(Fragments\(|QualityLevels\(|\.ts(\?|$)|\.m4s(\?|$)|init\.mp4)/i;
+
+const CAPTURE_LIMIT = 40;
+const CAPTURE_TTL_MS = 45 * 60 * 1000;
+
+/** @type {Map<number, Array<{url: string, at: number}>>} */
+const captured = new Map();
+
+function looksLikeWholeVideo(url) {
+  return CANDIDATE_URL.test(url) && !SEGMENT_URL.test(url);
+}
+
+function rememberMedia(tabId, url) {
+  if (tabId < 0 || !looksLikeWholeVideo(url)) return;
+
+  const list = captured.get(tabId) ?? [];
+  if (list.some((item) => item.url === url)) return;
+
+  list.unshift({ url, at: Date.now() });
+  captured.set(tabId, list.slice(0, CAPTURE_LIMIT));
+}
+
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => rememberMedia(details.tabId, details.url),
+  { urls: ["*://*.licdn.com/*", "*://*.linkedin.com/*"] }
+);
+
+function recentMedia(tabId) {
+  const now = Date.now();
+  const list = (captured.get(tabId) ?? []).filter((item) => now - item.at < CAPTURE_TTL_MS);
+  captured.set(tabId, list);
+  return list.map((item) => item.url);
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  captured.delete(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url) captured.delete(tabId);
+});
+
 // ------------------------------------------------------------------ ações
 
 /**
@@ -184,6 +235,13 @@ const ACTIONS = {
 
   async resolveUrl(message) {
     return resolveUrl(message);
+  },
+
+  /** Arquivos de vídeo que esta aba já pediu na rede. */
+  async captured(message, sender) {
+    const tabId = typeof message?.tabId === "number" ? message.tabId : sender?.tab?.id;
+    if (typeof tabId !== "number") return { items: [] };
+    return { items: recentMedia(tabId) };
   },
 
   /**

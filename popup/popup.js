@@ -1,4 +1,4 @@
-import { pickStream } from "../lib/video.js";
+import { kindFromUrl, normalizeStreams, pickStream } from "../lib/video.js";
 
 const els = {
   status: document.getElementById("status"),
@@ -39,6 +39,11 @@ async function askPage(tabId) {
   }
 }
 
+async function fetchCaptured(tabId) {
+  const response = await send({ type: "captured", tabId });
+  return (response?.items ?? []).map((url) => ({ url, kind: kindFromUrl(url) }));
+}
+
 async function listFromTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) {
@@ -51,7 +56,6 @@ async function listFromTab() {
     return null;
   }
 
-  // Caminho principal: a página já sabe onde está o vídeo.
   let answer = await askPage(tab.id);
 
   // Aba aberta antes da instalação: injeta agora e pergunta de novo.
@@ -60,15 +64,32 @@ async function listFromTab() {
     if (injected?.ok) answer = await askPage(tab.id);
   }
 
-  if (answer?.streams?.length) return { ...answer, via: "página" };
+  const domStreams = answer?.streams ?? [];
+  const streams = normalizeStreams([...domStreams, ...(await fetchCaptured(tab.id))]);
 
-  // Reserva: a extensão lê a página com a sua sessão.
-  const response = await send({ type: "resolveUrl", url: tab.url });
-  if (!response?.ok) {
-    setStatus(response?.error || "Não achei vídeo nesta aba.", "is-error");
-    return null;
+  if (streams.length > 0) {
+    return {
+      streams,
+      postId: answer?.postId ?? null,
+      author: answer?.author ?? null,
+      url: answer?.url ?? tab.url,
+      counts: answer?.counts ?? null,
+      via: domStreams.length > 0 ? "página" : "rede",
+    };
   }
-  return { ...response, via: "leitura da página" };
+
+  // Último recurso: a extensão lê a página com a sua sessão.
+  const response = await send({ type: "resolveUrl", url: tab.url });
+  if (response?.ok) return { ...response, via: "leitura do link" };
+
+  return {
+    streams: [],
+    postId: null,
+    author: null,
+    url: tab.url,
+    counts: answer?.counts ?? null,
+    error: response?.error ?? null,
+  };
 }
 
 async function download(stream, button, context) {
@@ -154,20 +175,28 @@ function render(context) {
   if (!context?.streams?.length) {
     const counts = context?.counts;
     const detail = counts
-      ? ` (encontrei ${counts.videos} player(s), ${counts.payloads} bloco(s) de dados e ${counts.codes} bloco(s) de código na página)`
+      ? ` Encontrei ${counts.videos} player(s), ${counts.payloads} bloco(s) de dados, ${counts.codes} bloco(s) de código e ${counts.frames ?? 0} vídeo(s) incorporado(s).`
       : "";
-    setStatus(
-      `Não achei o vídeo nesta página${detail}. Passe o mouse sobre o vídeo e use o botão azul de baixar.`,
-      "is-error"
-    );
+
+    const message = counts?.frames > 0
+      ? `Este post usa um vídeo incorporado de outro site (YouTube, Vimeo…). Baixe direto na origem.${detail}`
+      : `Ainda não achei o arquivo. Dê play no vídeo por 2 segundos, depois abra este painel de novo.${detail}`;
+
+    setStatus(message, "is-error");
     return;
   }
 
   els.results.append(buildCard(context));
 
   const preferred = pickStream(context.streams, settings.quality);
-  const note = preferred?.kind === "hls" ? " Veio em pedaços: a extensão junta antes de salvar." : "";
-  setStatus(`Vídeo encontrado (${context.streams.length} opções).${note}`, "ok");
+  const notes = [];
+  if (context.via === "rede") notes.push("pego da rede ao carregar o vídeo");
+  if (preferred?.kind === "hls") notes.push("veio em pedaços: a extensão junta antes de salvar");
+
+  setStatus(
+    `Vídeo encontrado (${context.streams.length} opções${notes.length ? " — " + notes.join("; ") : ""}).`,
+    "ok"
+  );
 }
 
 async function loadFromTab() {

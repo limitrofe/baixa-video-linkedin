@@ -12,6 +12,14 @@
   if (window.__bvlInstalled) return;
   window.__bvlInstalled = true;
 
+  // O LinkedIn carrega centenas de arquivos; o histórico de recursos do
+  // navegador guarda só os últimos 250 e pode esquecer justamente o vídeo.
+  try {
+    performance.setResourceTimingBufferSize?.(2000);
+  } catch {
+    // sem problema: a captura de rede do serviço em segundo plano cobre isso
+  }
+
   const BUTTON_FLAG = "data-bvl-host";
   const SVG_NS = "http://www.w3.org/2000/svg";
   const DOWNLOAD_PATH =
@@ -239,6 +247,20 @@
     };
   }
 
+  /** Endereços de vídeo que a própria página já pediu (sem precisar de HTML). */
+  function networkStreams() {
+    const out = [];
+    const whole = /(\.m3u8|playlist\/vid\/|\.mp4(\?|$))/i;
+    const segment = /(Fragments\(|QualityLevels\(|\.ts(\?|$)|\.m4s(\?|$)|init\.mp4)/i;
+
+    for (const entry of performance.getEntriesByType("resource")) {
+      const url = entry.name;
+      if (!url || !whole.test(url) || segment.test(url)) continue;
+      out.push({ url, kind: kindFromUrl(url), height: null, bitrate: 0 });
+    }
+    return out;
+  }
+
   /** Varre a página inteira sem depender de achar o player. */
   function pageStreams() {
     const found = [];
@@ -247,15 +269,21 @@
       found.push(...streamsFromVideoElement(element));
     }
     found.push(...streamsFromCodes(document));
+    found.push(...networkStreams());
 
     return normalize(found);
   }
 
   function counts() {
+    const frames = [...document.querySelectorAll("iframe")].filter((frame) =>
+      /youtube|vimeo|dailymotion|wistia/i.test(frame.getAttribute("src") ?? "")
+    ).length;
+
     return {
       videos: document.querySelectorAll("video").length,
       payloads: document.querySelectorAll("[data-sources]").length,
       codes: document.querySelectorAll("code").length,
+      frames,
     };
   }
 
@@ -381,8 +409,17 @@
   async function handleClick(button, element) {
     const video = element.tagName === "VIDEO" ? element : element.querySelector?.("video");
     const context = collect(element);
+
+    // Nada no HTML? Então usa o que a página pediu na rede ao tocar o vídeo.
     if (context.streams.length === 0) {
-      toast("Não achei o endereço deste vídeo. Role a página até ele aparecer e tente de novo.", "error");
+      const captured = await send({ type: "captured" });
+      context.streams = normalize(
+        (captured?.items ?? []).map((url) => ({ url, kind: kindFromUrl(url), height: null, bitrate: 0 }))
+      );
+    }
+
+    if (context.streams.length === 0) {
+      toast("Não achei o arquivo deste vídeo. Dê play nele por 2 segundos e clique de novo.", "error");
       return;
     }
 
