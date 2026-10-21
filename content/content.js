@@ -100,30 +100,38 @@
   // ------------------------------------------------------- extrair os endereços
 
   function streamsFromVideoElement(video) {
-    const raw = video.getAttribute("data-sources");
-    if (!raw) return [];
+    const out = [];
 
-    let parsed;
-    try {
-      parsed = JSON.parse(decodeEntities(raw));
-    } catch {
-      return [];
+    const raw = video.getAttribute?.("data-sources");
+    if (raw) {
+      try {
+        const parsed = JSON.parse(decodeEntities(raw));
+        if (Array.isArray(parsed)) {
+          for (const source of parsed) {
+            const url = source?.src ?? source?.url ?? null;
+            if (!url) continue;
+            out.push({
+              url,
+              kind: kindFromUrl(url, source?.type ?? ""),
+              width: Number(source?.width) || null,
+              height: Number(source?.height) || null,
+              bitrate: Number(source?.["data-bitrate"]) || 0,
+            });
+          }
+        }
+      } catch {
+        // atributo em outro formato: segue para as outras pistas
+      }
     }
-    if (!Array.isArray(parsed)) return [];
 
-    return parsed
-      .map((source) => {
-        const url = source?.src ?? source?.url ?? null;
-        if (!url) return null;
-        return {
-          url,
-          kind: kindFromUrl(url, source?.type ?? ""),
-          width: Number(source?.width) || null,
-          height: Number(source?.height) || null,
-          bitrate: Number(source?.["data-bitrate"]) || 0,
-        };
-      })
-      .filter(Boolean);
+    // Alguns players usam <source src="..."> em vez do atributo.
+    for (const source of video.querySelectorAll?.("source[src]") ?? []) {
+      const src = source.getAttribute("src");
+      if (!src || src.startsWith("blob:")) continue;
+      out.push({ url: src, kind: kindFromUrl(src, source.getAttribute("type") ?? ""), height: null, bitrate: 0 });
+    }
+
+    return out;
   }
 
   function holdMedia(node, found, depth) {
@@ -184,11 +192,11 @@
     return out;
   }
 
-  function containerFor(video) {
-    return (
-      video.closest('[data-id^="urn:li:"], [data-urn^="urn:li:"], .feed-shared-update-v2, article, li') ??
-      video.parentElement
-    );
+  const CONTAINER_SELECTOR =
+    '[data-id^="urn:li:"], [data-urn^="urn:li:"], .feed-shared-update-v2, article, li';
+
+  function containerFor(node) {
+    return node?.closest?.(CONTAINER_SELECTOR) ?? node?.parentElement ?? document.body;
   }
 
   function postIdFor(container) {
@@ -209,28 +217,63 @@
   /**
    * Junta todas as pistas de um vídeo: atributo do player, dados do post e,
    * se não houver nada no post, a varredura da página inteira.
+   * @param {Element|null} element player, bloco com data-sources, ou null
    */
-  function collect(video) {
-    const container = containerFor(video);
-    const streams = [...streamsFromVideoElement(video), ...streamsFromCodes(container)];
-    if (streams.length === 0) streams.push(...streamsFromCodes(document));
+  function collect(element) {
+    const video = element?.tagName === "VIDEO" ? element : element?.querySelector?.("video") ?? null;
+    const anchor = video ?? element ?? null;
+    const container = anchor ? containerFor(anchor) : document.body;
 
+    const streams = [];
+    if (video) streams.push(...streamsFromVideoElement(video));
+    if (element?.getAttribute?.("data-sources")) streams.push(...streamsFromVideoElement(element));
+    if (container) streams.push(...streamsFromCodes(container));
+
+    const normalized = normalize(streams);
     return {
-      streams: normalize(streams),
+      streams: normalized.length > 0 ? normalized : pageStreams(),
       postId: postIdFor(container),
       author: authorFor(container),
       url: location.href,
+      counts: counts(),
+    };
+  }
+
+  /** Varre a página inteira sem depender de achar o player. */
+  function pageStreams() {
+    const found = [];
+
+    for (const element of document.querySelectorAll("video, [data-sources]")) {
+      found.push(...streamsFromVideoElement(element));
+    }
+    found.push(...streamsFromCodes(document));
+
+    return normalize(found);
+  }
+
+  function counts() {
+    return {
+      videos: document.querySelectorAll("video").length,
+      payloads: document.querySelectorAll("[data-sources]").length,
+      codes: document.querySelectorAll("code").length,
     };
   }
 
   /** O vídeo "principal" da página: o maior que está à vista. */
   function mainVideo() {
-    const videos = [...document.querySelectorAll("video")].filter((video) => {
+    const videos = [...document.querySelectorAll("video")];
+    if (videos.length === 0) return null;
+
+    const visible = videos.filter((video) => {
       const rect = video.getBoundingClientRect();
       return rect.width > 120 && rect.height > 80;
     });
-    if (videos.length === 0) return null;
-    return videos.sort((a, b) => {
+
+    // Post com vídeo "de capa": o player só existe depois do clique, e aí
+    // qualquer vídeo da página serve de referência.
+    const pool = visible.length > 0 ? visible : videos;
+
+    return pool.sort((a, b) => {
       const ra = a.getBoundingClientRect();
       const rb = b.getBoundingClientRect();
       return rb.width * rb.height - ra.width * ra.height;
@@ -335,14 +378,19 @@
 
   // ------------------------------------------------------------------- download
 
-  async function handleClick(button, video) {
-    const context = collect(video);
+  async function handleClick(button, element) {
+    const video = element.tagName === "VIDEO" ? element : element.querySelector?.("video");
+    const context = collect(element);
     if (context.streams.length === 0) {
       toast("Não achei o endereço deste vídeo. Role a página até ele aparecer e tente de novo.", "error");
       return;
     }
 
     if (button.dataset.bvlFallback === "1") {
+      if (!video) {
+        toast("Dê play no vídeo e tente de novo — a gravação precisa dele tocando.", "error");
+        return;
+      }
       setBusy(button, true);
       toast("Gravando em tempo real… não feche a aba até o vídeo terminar.", "ok");
       try {
@@ -409,10 +457,10 @@
     return svg;
   }
 
-  function decorate(video) {
-    const host = video.parentElement;
+  function decorate(element) {
+    const host = element.parentElement;
     if (!host || host.querySelector(`[${BUTTON_FLAG}]`)) return;
-    if (collect(video).streams.length === 0) return;
+    if (collect(element).streams.length === 0) return;
 
     if (getComputedStyle(host).position === "static") host.style.position = "relative";
 
@@ -427,16 +475,16 @@
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      handleClick(button, video);
+      handleClick(button, element);
     });
 
     host.append(button);
   }
 
   function scan() {
-    for (const video of document.querySelectorAll("video")) {
-      if (video.closest(`[${BUTTON_FLAG}]`)) continue;
-      decorate(video);
+    for (const element of document.querySelectorAll("video, [data-sources]")) {
+      if (element.closest(`[${BUTTON_FLAG}]`)) continue;
+      decorate(element);
     }
   }
 
@@ -445,9 +493,8 @@
   let lastReported = null;
 
   function reportContext() {
-    const video = mainVideo();
-    if (!video) return;
-    const context = collect(video);
+    const context = collect(mainVideo());
+    if (context.streams.length === 0) return;
     const key = `${context.postId}|${context.streams.length}`;
     if (key === lastReported) return;
     lastReported = key;
@@ -466,12 +513,8 @@
     if (message?.type !== "bvl:list") return false;
 
     const video = mainVideo();
-    if (!video) {
-      sendResponse({ ok: true, streams: [], postId: null, author: null, url: location.href });
-      return false;
-    }
-
     const context = collect(video);
+
     sendResponse({ ok: true, ...context });
     return false;
   });

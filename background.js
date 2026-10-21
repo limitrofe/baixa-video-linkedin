@@ -141,7 +141,11 @@ async function resolveUrl(message) {
 
   const streams = parseHtml(html);
   if (streams.length === 0) {
-    throw new Error("Não achei vídeo nessa página. Abra o post e clique de novo.");
+    // A página que o LinkedIn entrega para uma leitura automática costuma vir
+    // sem os dados do vídeo: eles são montados só no navegador aberto.
+    throw new Error(
+      "A leitura automática não achou o vídeo. Abra o post e use o botão que aparece sobre o vídeo."
+    );
   }
 
   return {
@@ -180,6 +184,23 @@ const ACTIONS = {
 
   async resolveUrl(message) {
     return resolveUrl(message);
+  },
+
+  /**
+   * Injeta o content script numa aba que já estava aberta antes da instalação.
+   * Sem isso, o botão só apareceria depois de recarregar a página — e o popup
+   * ficaria sempre vazio na primeira tentativa.
+   */
+  async ensureInjected(message) {
+    const tabId = message?.tabId;
+    if (typeof tabId !== "number") throw new Error("Aba não informada.");
+
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content/content.js"] });
+    await chrome.scripting
+      .insertCSS({ target: { tabId }, files: ["content/content.css"] })
+      .catch(() => {}); // o CSS pode já estar lá
+
+    return { injected: true };
   },
 
   async settings() {

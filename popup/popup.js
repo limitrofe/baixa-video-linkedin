@@ -31,6 +31,14 @@ async function send(message) {
   }
 }
 
+async function askPage(tabId) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, { type: "bvl:list" });
+  } catch {
+    return null;
+  }
+}
+
 async function listFromTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) {
@@ -44,12 +52,15 @@ async function listFromTab() {
   }
 
   // Caminho principal: a página já sabe onde está o vídeo.
-  try {
-    const answer = await chrome.tabs.sendMessage(tab.id, { type: "bvl:list" });
-    if (answer?.streams?.length) return { ...answer, via: "página" };
-  } catch {
-    // content script ainda não rodou nesta aba: cai no caminho de reserva
+  let answer = await askPage(tab.id);
+
+  // Aba aberta antes da instalação: injeta agora e pergunta de novo.
+  if (!answer) {
+    const injected = await send({ type: "ensureInjected", tabId: tab.id });
+    if (injected?.ok) answer = await askPage(tab.id);
   }
+
+  if (answer?.streams?.length) return { ...answer, via: "página" };
 
   // Reserva: a extensão lê a página com a sua sessão.
   const response = await send({ type: "resolveUrl", url: tab.url });
@@ -141,7 +152,14 @@ function render(context) {
   els.results.replaceChildren();
 
   if (!context?.streams?.length) {
-    setStatus("Esse post não tem vídeo — ou o vídeo ainda não carregou na página.", "is-error");
+    const counts = context?.counts;
+    const detail = counts
+      ? ` (encontrei ${counts.videos} player(s), ${counts.payloads} bloco(s) de dados e ${counts.codes} bloco(s) de código na página)`
+      : "";
+    setStatus(
+      `Não achei o vídeo nesta página${detail}. Passe o mouse sobre o vídeo e use o botão azul de baixar.`,
+      "is-error"
+    );
     return;
   }
 

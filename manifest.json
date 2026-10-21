@@ -10,7 +10,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["downloads", "storage", "offscreen", "activeTab"],
+  "permissions": ["downloads", "storage", "offscreen", "scripting", "activeTab"],
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://*.licdn.com/*"
