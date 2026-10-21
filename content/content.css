@@ -1,0 +1,89 @@
+/* Estilos do que a extensão injeta no LinkedIn. Cores tiradas do próprio
+   LinkedIn (#0a66c2) para o botão não parecer corpo estranho. */
+
+button.bvl-overlay {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2147483000;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  /* Visível de leve o tempo todo: sumir por completo faria ninguém descobrir. */
+  opacity: 0.82;
+  transition: opacity 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+button.bvl-overlay:hover,
+button.bvl-overlay:focus-visible,
+button.bvl-overlay.is-busy {
+  opacity: 1;
+}
+
+button.bvl-overlay:hover {
+  background: #0a66c2;
+  transform: translateY(-1px);
+}
+
+button.bvl-overlay:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  opacity: 1;
+}
+
+button.bvl-overlay.is-busy {
+  background: #0a66c2;
+  animation: bvl-pulse 900ms ease-in-out infinite;
+}
+
+.bvl-toast {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 2147483001;
+  max-width: 380px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(15, 20, 25, 0.95);
+  color: #fff;
+  font: 500 14px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.bvl-toast--on {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.bvl-toast--error {
+  border-left: 3px solid #f4212e;
+}
+
+.bvl-toast--ok {
+  border-left: 3px solid #057642;
+}
+
+@keyframes bvl-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.bvl-overlay,
+  .bvl-toast {
+    transition: none;
+    animation: none;
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Baixa Vídeo LinkedIn",
+  "version": "1.0.0",
+  "minimum_chrome_version": "109",
+  "description": "Baixa vídeos de posts do LinkedIn — MP4 inteiro quando existe, ou remontando os pedaços — sem serviço de terceiros.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["downloads", "storage", "offscreen", "activeTab"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://*.licdn.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Baixa Vídeo LinkedIn",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

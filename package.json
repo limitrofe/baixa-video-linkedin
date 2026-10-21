@@ -1,0 +1,10 @@
+{
+  "name": "baixa-video-linkedin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Extensão do Chrome para baixar vídeos de posts do LinkedIn.",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
